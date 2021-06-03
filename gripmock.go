@@ -211,6 +211,8 @@ func generateProtoc(param protocParam) {
 }
 
 func buildServer(output string, protoPath string) {
+	exec.Command("go", "get", "gitlab.ozon.ru/map/types").Run()
+
 	args := []string{"build", "-o", output + "grpcserver", output + "server.go"}
 
 	files, _ := ioutil.ReadDir(protoPath)
