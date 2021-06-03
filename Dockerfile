@@ -17,14 +17,15 @@ RUN go get -u -v github.com/golang/protobuf/protoc-gen-go \
 RUN go get github.com/markbates/pkger/cmd/pkger
 
 # cloning well-known-types
-RUN git clone https://github.com/google/protobuf.git /protobuf-repo
-
 RUN mkdir protobuf
-
-# only use needed files
+RUN git clone https://github.com/google/protobuf.git /protobuf-repo
 RUN mv /protobuf-repo/src/ /protobuf/
-
 RUN rm -rf /protobuf-repo
+
+RUN mkdir protobuf/google
+RUN git clone https://github.com/googleapis/googleapis.git /googleapis
+RUN mv /googleapis/google/api /protobuf/google/
+RUN rm -rf /googleapis
 
 RUN mkdir -p /go/src/github.com/tokopedia/gripmock
 

@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"os"
 	"os/exec"
@@ -54,14 +55,16 @@ func main() {
 	protoPaths := flag.Args()
 
 	if len(protoPaths) == 0 {
-		log.Fatal("Need at least one proto file")
+		protoPaths = append(protoPaths, "/proto")
+	} else if len(protoPaths) > 1 {
+		log.Fatal("Need only one proto path")
 	}
 
 	importDirs := strings.Split(*imports, ",")
 
 	// generate pb.go and grpc server based on proto
 	generateProtoc(protocParam{
-		protoPath:   protoPaths,
+		protoPath:   protoPaths[0],
 		adminPort:   *adminport,
 		grpcAddress: *grpcBindAddr,
 		grpcPort:    *grpcPort,
@@ -70,7 +73,7 @@ func main() {
 	})
 
 	// build the server
-	buildServer(output, protoPaths)
+	buildServer(output, protoPaths[0])
 
 	// and run
 	run, runerr := runGrpcServer(output)
@@ -86,14 +89,17 @@ func main() {
 	}
 }
 
-func getProtoName(path string) string {
-	paths := strings.Split(path, "/")
-	filename := paths[len(paths)-1]
+func getProtoNameFromFilename(filename string) string {
 	return strings.Split(filename, ".")[0]
 }
 
+func getProtoNameFromPath(path string) string {
+	paths := strings.Split(path, "/")
+	return getProtoNameFromFilename(paths[len(paths)-1])
+}
+
 type protocParam struct {
-	protoPath   []string
+	protoPath   string
 	adminPort   string
 	grpcAddress string
 	grpcPort    string
@@ -101,8 +107,8 @@ type protocParam struct {
 	imports     []string
 }
 
-func generateProtoc(param protocParam) {
-	protodirs := strings.Split(param.protoPath[0], "/")
+func generateProtoc2(param protocParam) {
+	protodirs := strings.Split(param.protoPath, "/")
 	protodir := ""
 	if len(protodirs) > 0 {
 		protodir = strings.Join(protodirs[:len(protodirs)-1], "/") + "/"
@@ -113,10 +119,11 @@ func generateProtoc(param protocParam) {
 	for _, i := range param.imports {
 		args = append(args, "-I", i)
 	}
-	args = append(args, param.protoPath...)
+	args = append(args, param.protoPath)
 	args = append(args, "--go_out=plugins=grpc:"+param.output)
 	args = append(args, fmt.Sprintf("--gripmock_out=admin-port=%s,grpc-address=%s,grpc-port=%s:%s",
 		param.adminPort, param.grpcAddress, param.grpcPort, param.output))
+	log.Printf("run protoc with args %v", args)
 	protoc := exec.Command("protoc", args...)
 	protoc.Stdout = os.Stdout
 	protoc.Stderr = os.Stderr
@@ -126,9 +133,73 @@ func generateProtoc(param protocParam) {
 	}
 
 	// change package to "main" on generated code
-	for _, proto := range param.protoPath {
-		protoname := getProtoName(proto)
-		sed := exec.Command("sed", "-i", `s/^package \w*$/package main/`, param.output+protoname+".pb.go")
+	//for _, proto := range param.protoPath {
+	protoName := getProtoNameFromPath(param.protoPath)
+	sedArgs := []string{"-i", `s/^package \w*$/package main/`, param.output + protoName + ".pb.go"}
+	sed := exec.Command("sed", sedArgs...)
+	sed.Stderr = os.Stderr
+	sed.Stdout = os.Stdout
+	err = sed.Run()
+	if err != nil {
+		log.Fatal("Fail on sed")
+	}
+	//}
+}
+
+func generateProtoc(param protocParam) {
+	if !strings.HasSuffix(param.protoPath, "/") {
+		param.protoPath += "/"
+	}
+
+	args := []string{"-I", param.protoPath}
+	// include well-known-types
+	for _, i := range param.imports {
+		args = append(args, "-I", i)
+	}
+
+	files, err := ioutil.ReadDir(param.protoPath)
+	if err != nil {
+		log.Fatalf("Can't read proto from dir %s. %v\n", param.protoPath, err)
+	}
+	for _, file := range files {
+		if file.IsDir() {
+			continue
+		}
+		if !strings.HasSuffix(file.Name(), ".proto") {
+			continue
+		}
+
+		log.Printf("found proto file %s", file.Name())
+		args = append(args, param.protoPath+file.Name())
+	}
+
+	args = append(args, "--go_out=plugins=grpc:"+param.output)
+	args = append(args, fmt.Sprintf("--gripmock_out=admin-port=%s,grpc-address=%s,grpc-port=%s:%s",
+		param.adminPort, param.grpcAddress, param.grpcPort, param.output))
+	log.Printf("run protoc with args %v", args)
+	protoc := exec.Command("protoc", args...)
+	protoc.Stdout = os.Stdout
+	protoc.Stderr = os.Stderr
+	err = protoc.Run()
+	if err != nil {
+		log.Fatal("Fail on protoc ", err)
+	}
+	log.Print("protoc executed successfully")
+
+	// change package to "main" on generated code
+	for _, file := range files {
+		if file.IsDir() {
+			continue
+		}
+		if !strings.HasSuffix(file.Name(), ".proto") {
+			continue
+		}
+
+		protoName := getProtoNameFromFilename(file.Name()) + ".pb.go"
+		log.Printf("go file %s from proto %s", protoName, file.Name())
+		sedArgs := []string{"-i", `s/^package \w*$/package main/`, param.output + protoName}
+		log.Printf("run sed with args %v", sedArgs)
+		sed := exec.Command("sed", sedArgs...)
 		sed.Stderr = os.Stderr
 		sed.Stdout = os.Stdout
 		err = sed.Run()
@@ -136,12 +207,15 @@ func generateProtoc(param protocParam) {
 			log.Fatal("Fail on sed")
 		}
 	}
+	log.Print("change package to \"main\" done")
 }
 
-func buildServer(output string, protoPaths []string) {
+func buildServer(output string, protoPath string) {
 	args := []string{"build", "-o", output + "grpcserver", output + "server.go"}
-	for _, path := range protoPaths {
-		args = append(args, output+getProtoName(path)+".pb.go")
+
+	files, _ := ioutil.ReadDir(protoPath)
+	for _, file := range files {
+		args = append(args, output+getProtoNameFromFilename(file.Name())+".pb.go")
 	}
 	build := exec.Command("go", args...)
 	build.Stdout = os.Stdout
