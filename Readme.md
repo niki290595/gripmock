@@ -1,3 +1,6 @@
+# How to build for ozon locally
+`'docker build --build-arg GITLAB_API_TOKEN=${TOKEN} --tag gitlab-registry.ozon.ru/rtl/gripmock:local .`
+
 # GripMock
 GripMock is a **mock server** for **GRPC** services. It's using a `.proto` file to generate implementation of gRPC service for you.
 If you are already familiar with [Apiary](https://apiary.io) or [WireMock](http://wiremock.org) for mocking API service and looking for similiar thing for GRPC then this is the perfect fit for that.
