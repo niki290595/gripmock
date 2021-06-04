@@ -14,14 +14,20 @@ import (
 	"github.com/tokopedia/gripmock/stub"
 )
 
+const (
+	defaultImportsPath = "/protobuf"
+	defaultStubPath = "/stubs"
+	defaultProtoPath = "/proto/"
+)
+
 func main() {
 	outputPointer := flag.String("o", "", "directory to output server.go. Default is $GOPATH/src/grpc/")
 	grpcPort := flag.String("grpc-port", "4770", "Port of gRPC tcp server")
 	grpcBindAddr := flag.String("grpc-listen", "", "Adress the gRPC server will bind to. Default to localhost, set to 0.0.0.0 to use from another machine")
 	adminport := flag.String("admin-port", "4771", "Port of stub admin server")
 	adminBindAddr := flag.String("admin-listen", "", "Adress the admin server will bind to. Default to localhost, set to 0.0.0.0 to use from another machine")
-	stubPath := flag.String("stub", "", "Path where the stub files are (Optional)")
-	imports := flag.String("imports", "/protobuf", "comma separated imports path. default path /protobuf is where gripmock Dockerfile install WKT protos")
+	stubPath := flag.String("stub", defaultStubPath, "Path where the stub files are (Optional)")
+	imports := flag.String("imports", defaultImportsPath, "comma separated imports path. default path /protobuf is where gripmock Dockerfile install WKT protos")
 	// for backwards compatibility
 	if os.Args[1] == "gripmock" {
 		os.Args = append(os.Args[:1], os.Args[2:]...)
@@ -53,14 +59,16 @@ func main() {
 
 	// parse proto files
 	protoPaths := flag.Args()
-
 	if len(protoPaths) == 0 {
-		protoPaths = append(protoPaths, "/proto")
+		protoPaths = append(protoPaths, defaultProtoPath)
 	} else if len(protoPaths) > 1 {
 		log.Fatal("Need only one proto path")
 	}
 
 	importDirs := strings.Split(*imports, ",")
+	if !strings.Contains(*imports, defaultImportsPath) {
+		importDirs = append(importDirs, defaultImportsPath)
+	}
 
 	// generate pb.go and grpc server based on proto
 	generateProtoc(protocParam{
@@ -93,11 +101,6 @@ func getProtoNameFromFilename(filename string) string {
 	return strings.Split(filename, ".")[0]
 }
 
-func getProtoNameFromPath(path string) string {
-	paths := strings.Split(path, "/")
-	return getProtoNameFromFilename(paths[len(paths)-1])
-}
-
 type protocParam struct {
 	protoPath   string
 	adminPort   string
@@ -105,45 +108,6 @@ type protocParam struct {
 	grpcPort    string
 	output      string
 	imports     []string
-}
-
-func generateProtoc2(param protocParam) {
-	protodirs := strings.Split(param.protoPath, "/")
-	protodir := ""
-	if len(protodirs) > 0 {
-		protodir = strings.Join(protodirs[:len(protodirs)-1], "/") + "/"
-	}
-
-	args := []string{"-I", protodir}
-	// include well-known-types
-	for _, i := range param.imports {
-		args = append(args, "-I", i)
-	}
-	args = append(args, param.protoPath)
-	args = append(args, "--go_out=plugins=grpc:"+param.output)
-	args = append(args, fmt.Sprintf("--gripmock_out=admin-port=%s,grpc-address=%s,grpc-port=%s:%s",
-		param.adminPort, param.grpcAddress, param.grpcPort, param.output))
-	log.Printf("run protoc with args %v", args)
-	protoc := exec.Command("protoc", args...)
-	protoc.Stdout = os.Stdout
-	protoc.Stderr = os.Stderr
-	err := protoc.Run()
-	if err != nil {
-		log.Fatal("Fail on protoc ", err)
-	}
-
-	// change package to "main" on generated code
-	//for _, proto := range param.protoPath {
-	protoName := getProtoNameFromPath(param.protoPath)
-	sedArgs := []string{"-i", `s/^package \w*$/package main/`, param.output + protoName + ".pb.go"}
-	sed := exec.Command("sed", sedArgs...)
-	sed.Stderr = os.Stderr
-	sed.Stdout = os.Stdout
-	err = sed.Run()
-	if err != nil {
-		log.Fatal("Fail on sed")
-	}
-	//}
 }
 
 func generateProtoc(param protocParam) {
@@ -211,10 +175,19 @@ func generateProtoc(param protocParam) {
 }
 
 func buildServer(output string, protoPath string) {
+	exec.Command("go", "get", "github.com/gogo/protobuf/gogoproto").Run()
+	exec.Command("go", "get", "gitlab.ozon.ru/map/types/types.proto@v0.11.21").Run()
+
 	args := []string{"build", "-o", output + "grpcserver", output + "server.go"}
 
 	files, _ := ioutil.ReadDir(protoPath)
 	for _, file := range files {
+		if file.IsDir() {
+			continue
+		}
+		if !strings.HasSuffix(file.Name(), ".proto") {
+			continue
+		}
 		args = append(args, output+getProtoNameFromFilename(file.Name())+".pb.go")
 	}
 	build := exec.Command("go", args...)
