@@ -175,8 +175,7 @@ func generateProtoc(param protocParam) {
 }
 
 func buildServer(output string, protoPath string) {
-	exec.Command("go", "get", "github.com/gogo/protobuf/gogoproto").Run()
-	exec.Command("go", "get", "gitlab.ozon.ru/map/types/types.proto@v0.11.21").Run()
+	exec.Command("go", "get", "gitlab.ozon.ru/map/types").Run()
 
 	args := []string{"build", "-o", output + "grpcserver", output + "server.go"}
 
