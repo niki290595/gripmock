@@ -82,7 +82,7 @@ func main() {
 	signal.Notify(term, syscall.SIGTERM, syscall.SIGKILL, syscall.SIGINT)
 	select {
 	case err := <-runerr:
-		log.Fatal(err)
+		log.Fatalf("run err %s", err)
 	case <-term:
 		fmt.Println("Stopping gRPC Server")
 		run.Process.Kill()
@@ -105,45 +105,6 @@ type protocParam struct {
 	grpcPort    string
 	output      string
 	imports     []string
-}
-
-func generateProtoc2(param protocParam) {
-	protodirs := strings.Split(param.protoPath, "/")
-	protodir := ""
-	if len(protodirs) > 0 {
-		protodir = strings.Join(protodirs[:len(protodirs)-1], "/") + "/"
-	}
-
-	args := []string{"-I", protodir}
-	// include well-known-types
-	for _, i := range param.imports {
-		args = append(args, "-I", i)
-	}
-	args = append(args, param.protoPath)
-	args = append(args, "--go_out=plugins=grpc:"+param.output)
-	args = append(args, fmt.Sprintf("--gripmock_out=admin-port=%s,grpc-address=%s,grpc-port=%s:%s",
-		param.adminPort, param.grpcAddress, param.grpcPort, param.output))
-	log.Printf("run protoc with args %v", args)
-	protoc := exec.Command("protoc", args...)
-	protoc.Stdout = os.Stdout
-	protoc.Stderr = os.Stderr
-	err := protoc.Run()
-	if err != nil {
-		log.Fatal("Fail on protoc ", err)
-	}
-
-	// change package to "main" on generated code
-	//for _, proto := range param.protoPath {
-	protoName := getProtoNameFromPath(param.protoPath)
-	sedArgs := []string{"-i", `s/^package \w*$/package main/`, param.output + protoName + ".pb.go"}
-	sed := exec.Command("sed", sedArgs...)
-	sed.Stderr = os.Stderr
-	sed.Stdout = os.Stdout
-	err = sed.Run()
-	if err != nil {
-		log.Fatal("Fail on sed")
-	}
-	//}
 }
 
 func generateProtoc(param protocParam) {
@@ -211,7 +172,11 @@ func generateProtoc(param protocParam) {
 }
 
 func buildServer(output string, protoPath string) {
-	exec.Command("go", "get", "gitlab.ozon.ru/map/types").Run()
+	getErr := exec.Command("go", "get", "gitlab.ozon.ru/map/types").Run()
+	getErr = exec.Command("go", "get", "gitlab.ozon.ru/tariffication/types/ozon/tariff").Run()
+	if getErr != nil {
+		//log.Fatal(getErr)
+	}
 
 	args := []string{"build", "-o", output + "grpcserver", output + "server.go"}
 
@@ -222,9 +187,8 @@ func buildServer(output string, protoPath string) {
 	build := exec.Command("go", args...)
 	build.Stdout = os.Stdout
 	build.Stderr = os.Stderr
-	err := build.Run()
-	if err != nil {
-		log.Fatal(err)
+	if err := build.Run(); err != nil {
+		log.Fatalf("can't build server: %s", err)
 	}
 }
 
