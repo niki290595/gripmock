@@ -14,14 +14,20 @@ import (
 	"github.com/tokopedia/gripmock/stub"
 )
 
+const (
+	defaultImportsPath = "/protobuf"
+	defaultStubPath = "/stubs"
+	defaultProtoPath = "/proto/"
+)
+
 func main() {
 	outputPointer := flag.String("o", "", "directory to output server.go. Default is $GOPATH/src/grpc/")
 	grpcPort := flag.String("grpc-port", "4770", "Port of gRPC tcp server")
 	grpcBindAddr := flag.String("grpc-listen", "", "Adress the gRPC server will bind to. Default to localhost, set to 0.0.0.0 to use from another machine")
 	adminport := flag.String("admin-port", "4771", "Port of stub admin server")
 	adminBindAddr := flag.String("admin-listen", "", "Adress the admin server will bind to. Default to localhost, set to 0.0.0.0 to use from another machine")
-	stubPath := flag.String("stub", "", "Path where the stub files are (Optional)")
-	imports := flag.String("imports", "/protobuf", "comma separated imports path. default path /protobuf is where gripmock Dockerfile install WKT protos")
+	stubPath := flag.String("stub", defaultStubPath, "Path where the stub files are (Optional)")
+	imports := flag.String("imports", defaultImportsPath, "comma separated imports path. default path /protobuf is where gripmock Dockerfile install WKT protos")
 	// for backwards compatibility
 	if os.Args[1] == "gripmock" {
 		os.Args = append(os.Args[:1], os.Args[2:]...)
@@ -53,14 +59,16 @@ func main() {
 
 	// parse proto files
 	protoPaths := flag.Args()
-
 	if len(protoPaths) == 0 {
-		protoPaths = append(protoPaths, "/proto")
+		protoPaths = append(protoPaths, defaultProtoPath)
 	} else if len(protoPaths) > 1 {
 		log.Fatal("Need only one proto path")
 	}
 
 	importDirs := strings.Split(*imports, ",")
+	if !strings.Contains(*imports, defaultImportsPath) {
+		importDirs = append(importDirs, defaultImportsPath)
+	}
 
 	// generate pb.go and grpc server based on proto
 	generateProtoc(protocParam{
@@ -91,11 +99,6 @@ func main() {
 
 func getProtoNameFromFilename(filename string) string {
 	return strings.Split(filename, ".")[0]
-}
-
-func getProtoNameFromPath(path string) string {
-	paths := strings.Split(path, "/")
-	return getProtoNameFromFilename(paths[len(paths)-1])
 }
 
 type protocParam struct {
@@ -182,6 +185,12 @@ func buildServer(output string, protoPath string) {
 
 	files, _ := ioutil.ReadDir(protoPath)
 	for _, file := range files {
+		if file.IsDir() {
+			continue
+		}
+		if !strings.HasSuffix(file.Name(), ".proto") {
+			continue
+		}
 		args = append(args, output+getProtoNameFromFilename(file.Name())+".pb.go")
 	}
 	build := exec.Command("go", args...)
