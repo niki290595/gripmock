@@ -34,7 +34,6 @@ RUN git clone https://github.com/googleapis/googleapis.git /googleapis
 RUN mv /googleapis/google/api /protobuf/google/
 RUN rm -rf /googleapis
 
-
 RUN mkdir -p /protobuf/github.com/gogo/protobuf
 RUN git clone https://github.com/gogo/protobuf.git /gogo
 RUN mv /gogo/gogoproto /protobuf/github.com/gogo/protobuf
@@ -44,17 +43,21 @@ RUN rm -rf /gogo
 RUN mkdir protobuf/gitlab.ozon.ru
 
 # Map
-
 RUN mkdir -p /protobuf/gitlab.ozon.ru/map/types
 RUN git clone https://gitlab.ozon.ru/map/types.git /map
 RUN mv /map/* /protobuf/gitlab.ozon.ru/map/types
 RUN rm -rf /map
 
+# Metatarifficator
+RUN mkdir -p /protobuf/gitlab.ozon.ru/tariffication/types
+RUN git clone https://gitlab.ozon.ru/tariffication/types.git /tariffication
+RUN mv /tariffication/* /protobuf/gitlab.ozon.ru/tariffication/types
+RUN rm -rf /tariffication
+
+
 
 RUN mkdir -p /go/src/github.com/tokopedia/gripmock
-
 COPY . /go/src/github.com/tokopedia/gripmock
-
 WORKDIR /go/src/github.com/tokopedia/gripmock/protoc-gen-gripmock
 
 RUN pkger -h

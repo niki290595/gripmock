@@ -90,7 +90,7 @@ func main() {
 	signal.Notify(term, syscall.SIGTERM, syscall.SIGKILL, syscall.SIGINT)
 	select {
 	case err := <-runerr:
-		log.Fatal(err)
+		log.Fatalf("run err %s", err)
 	case <-term:
 		fmt.Println("Stopping gRPC Server")
 		run.Process.Kill()
@@ -175,7 +175,11 @@ func generateProtoc(param protocParam) {
 }
 
 func buildServer(output string, protoPath string) {
-	exec.Command("go", "get", "gitlab.ozon.ru/map/types").Run()
+	getErr := exec.Command("go", "get", "gitlab.ozon.ru/map/types").Run()
+	getErr = exec.Command("go", "get", "gitlab.ozon.ru/tariffication/types/ozon/tariff").Run()
+	if getErr != nil {
+		//log.Fatal(getErr)
+	}
 
 	args := []string{"build", "-o", output + "grpcserver", output + "server.go"}
 
@@ -192,9 +196,8 @@ func buildServer(output string, protoPath string) {
 	build := exec.Command("go", args...)
 	build.Stdout = os.Stdout
 	build.Stderr = os.Stderr
-	err := build.Run()
-	if err != nil {
-		log.Fatal(err)
+	if err := build.Run(); err != nil {
+		log.Fatalf("can't build server: %s", err)
 	}
 }
 
