@@ -10,67 +10,52 @@ import (
 	"strings"
 	"text/template"
 
-	"google.golang.org/protobuf/types/pluginpb"
-
+	"github.com/gobuffalo/packr/v2"
 	"github.com/golang/protobuf/proto"
 	"github.com/golang/protobuf/protoc-gen-go/descriptor"
-	"github.com/markbates/pkger"
+	"github.com/golang/protobuf/protoc-gen-go/generator"
+	plugin_go "github.com/golang/protobuf/protoc-gen-go/plugin"
 	"golang.org/x/tools/imports"
-	"google.golang.org/protobuf/compiler/protogen"
 )
 
 func main() {
-	// Tip of the hat to Tim Coulson
-	// https://medium.com/@tim.r.coulson/writing-a-protoc-plugin-with-google-golang-org-protobuf-cd5aa75f5777
-
-	// Protoc passes pluginpb.CodeGeneratorRequest in via stdin
-	// marshalled with Protobuf
-	input, _ := ioutil.ReadAll(os.Stdin)
-	var request pluginpb.CodeGeneratorRequest
-	if err := proto.Unmarshal(input, &request); err != nil {
-		log.Fatalf("error unmarshalling [%s]: %v", string(input), err)
-	}
-
-	// Initialise our plugin with default options
-	opts := protogen.Options{}
-	plugin, err := opts.New(&request)
+	gen := generator.New()
+	byt, err := ioutil.ReadAll(os.Stdin)
 	if err != nil {
-		log.Fatalf("error initializing plugin: %v", err)
+		log.Fatalf("Failed to read input: %v", err)
 	}
 
-	protos := make([]*descriptor.FileDescriptorProto, len(plugin.Files))
-	for index, file := range plugin.Files {
-		protos[index] = file.Proto
+	err = proto.Unmarshal(byt, gen.Request)
+	if err != nil {
+		log.Fatalf("Failed to unmarshal proto: %v", err)
 	}
 
-	params := make(map[string]string)
-	for _, param := range strings.Split(request.GetParameter(), ",") {
-		split := strings.Split(param, "=")
-		params[split[0]] = split[1]
-	}
+	gen.CommandLineParameters(gen.Request.GetParameter())
 
 	buf := new(bytes.Buffer)
-	err = generateServer(protos, &Options{
+	err = generateServer(gen.Request.ProtoFile, &Options{
 		writer:    buf,
-		adminPort: params["admin-port"],
-		grpcAddr:  fmt.Sprintf("%s:%s", params["grpc-address"], params["grpc-port"]),
+		adminPort: gen.Param["admin-port"],
+		grpcAddr:  fmt.Sprintf("%s:%s", gen.Param["grpc-address"], gen.Param["grpc-port"]),
 	})
-
 	if err != nil {
 		log.Fatalf("Failed to generate server %v", err)
 	}
-
-	file := plugin.NewGeneratedFile("server.go", ".")
-	file.Write(buf.Bytes())
-
-	// Generate a response from our plugin and marshall as protobuf
-	out, err := proto.Marshal(plugin.Response())
-	if err != nil {
-		log.Fatalf("error marshalling plugin response: %v", err)
+	gen.Response.File = []*plugin_go.CodeGeneratorResponse_File{
+		{
+			Name:    proto.String("server.go"),
+			Content: proto.String(buf.String()),
+		},
 	}
 
-	// Write the response to stdout, to be picked up by protoc
-	os.Stdout.Write(out)
+	data, err := proto.Marshal(gen.Response)
+	if err != nil {
+		gen.Error(err, "failed to marshal output proto")
+	}
+	_, err = os.Stdout.Write(data)
+	if err != nil {
+		gen.Error(err, "failed to write output proto")
+	}
 }
 
 type generatorParam struct {
@@ -82,11 +67,14 @@ type generatorParam struct {
 }
 
 type Service struct {
+	Alias   string
+	Package string
 	Name    string
 	Methods []methodTemplate
 }
 
 type methodTemplate struct {
+	Alias       string
 	Name        string
 	ServiceName string
 	MethodType  string
@@ -114,22 +102,18 @@ type Options struct {
 var SERVER_TEMPLATE string
 
 func init() {
-	f, err := pkger.Open("/protoc-gen-gripmock/server.tmpl")
-	if err != nil {
-		log.Fatalf("error opening server.tmpl: %s", err)
-	}
+	tmplBox := packr.New("template", "")
 
-	bytes, err := ioutil.ReadAll(f)
+	s, err := tmplBox.FindString("server.tmpl")
 	if err != nil {
-		log.Fatalf("error reading server.tmpl: %s", err)
+		log.Fatal("Can't find server.tmpl")
 	}
-
-	SERVER_TEMPLATE = string(bytes)
+	SERVER_TEMPLATE = s
 }
 
 func generateServer(protos []*descriptor.FileDescriptorProto, opt *Options) error {
-	services := extractServices(protos)
 	deps := resolveDependencies(protos)
+	services := extractServices(protos, deps)
 
 	param := generatorParam{
 		Services:     services,
@@ -184,7 +168,9 @@ func resolveDependencies(protos []*descriptor.FileDescriptorProto) map[string]st
 
 			// skip whether its not intended deps
 			// or has empty Go package
-			if proto.GetName() != dep || pkg == "" {
+			// or it already has an alias
+			_, ok := deps[pkg]
+			if ok || proto.GetName() != dep || pkg == "" {
 				continue
 			}
 
@@ -195,6 +181,13 @@ func resolveDependencies(protos []*descriptor.FileDescriptorProto) map[string]st
 			} else {
 				aliases[alias] = true
 			}
+			deps[pkg] = alias
+		}
+	}
+
+	for _, proto := range protos {
+		alias, pkg := getGoPackage(proto)
+		if _, ok := deps[pkg]; !ok {
 			deps[pkg] = alias
 		}
 	}
@@ -214,25 +207,24 @@ func getGoPackage(proto *descriptor.FileDescriptorProto) (alias string, goPackag
 		goPackage = splits[0]
 		alias = splits[1]
 	} else {
-		splitSlash := strings.Split(proto.GetName(), "/")
-		split := strings.Split(splitSlash[len(splitSlash)-1], ".")
-		alias = split[0]
+		splitSlash := strings.Split(goPackage, "/")
+		alias = splitSlash[len(splitSlash)-1]
 	}
-
-	// Aliases can't be keywords
-	if isKeyword(alias) {
-		alias = fmt.Sprintf("%s_pb", alias)
+	if pkg := proto.GetPackage(); pkg != "" && !strings.Contains(pkg, ".") {
+		alias = pkg
 	}
-
 	return
 }
 
 // change the structure also translate method type
-func extractServices(protos []*descriptor.FileDescriptorProto) []Service {
+func extractServices(protos []*descriptor.FileDescriptorProto, deps map[string]string) []Service {
 	svcTmp := []Service{}
 	for _, proto := range protos {
+		alias, pkg := getGoPackage(proto)
 		for _, svc := range proto.GetService() {
 			var s Service
+			s.Alias = alias
+			s.Package = deps[pkg]
 			s.Name = svc.GetName()
 			methods := make([]methodTemplate, len(svc.Method))
 			for j, method := range svc.Method {
@@ -246,10 +238,11 @@ func extractServices(protos []*descriptor.FileDescriptorProto) []Service {
 				}
 
 				methods[j] = methodTemplate{
+					Alias:       alias,
 					Name:        strings.Title(*method.Name),
 					ServiceName: svc.GetName(),
-					Input:       getMessageType(protos, proto.GetDependency(), method.GetInputType()),
-					Output:      getMessageType(protos, proto.GetDependency(), method.GetOutputType()),
+					Input:       getMessageType(protos, proto.GetDependency(), method.GetInputType(), alias),
+					Output:      getMessageType(protos, proto.GetDependency(), method.GetOutputType(), alias),
 					MethodType:  tipe,
 				}
 			}
@@ -260,10 +253,14 @@ func extractServices(protos []*descriptor.FileDescriptorProto) []Service {
 	return svcTmp
 }
 
-func getMessageType(protos []*descriptor.FileDescriptorProto, deps []string, tipe string) string {
+func getMessageType(protos []*descriptor.FileDescriptorProto, deps []string, tipe string, alias string) string {
 	split := strings.Split(tipe, ".")[1:]
 	targetPackage := strings.Join(split[:len(split)-1], ".")
 	targetType := split[len(split)-1]
+	if split[0] == alias {
+		return fmt.Sprintf("%s.%s", alias, targetType)
+	}
+
 	for _, dep := range deps {
 		for _, proto := range protos {
 			if proto.GetName() != dep || proto.GetPackage() != targetPackage {
@@ -282,42 +279,4 @@ func getMessageType(protos []*descriptor.FileDescriptorProto, deps []string, tip
 		}
 	}
 	return targetType
-}
-
-func isKeyword(word string) bool {
-	keywords := [...]string{
-		"break",
-		"case",
-		"chan",
-		"const",
-		"continue",
-		"default",
-		"defer",
-		"else",
-		"fallthrough",
-		"for",
-		"func",
-		"go",
-		"goto",
-		"if",
-		"import",
-		"interface",
-		"map",
-		"package",
-		"range",
-		"return",
-		"select",
-		"struct",
-		"switch",
-		"type",
-		"var",
-	}
-
-	for _, keyword := range keywords {
-		if strings.ToLower(word) == keyword {
-			return true
-		}
-	}
-
-	return false
 }

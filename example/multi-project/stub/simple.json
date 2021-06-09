@@ -1,6 +1,6 @@
 {
-  "service": "Gripmock",
-  "method": "SayHello",
+  "service": "Greeter",
+  "method": "Greet",
   "input": {
     "equals": {
       "name": "tokopedia"

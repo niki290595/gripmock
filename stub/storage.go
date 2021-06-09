@@ -1,12 +1,14 @@
 package stub
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"log"
 	"reflect"
 	"regexp"
+	"sort"
 	"sync"
 
 	"github.com/lithammer/fuzzysearch/fuzzy"
@@ -16,8 +18,6 @@ var mx = sync.Mutex{}
 
 // below represent map[servicename][methodname][]expectations
 type stubMapping map[string]map[string][]storage
-
-type matchFunc func(interface{}, interface{}) bool
 
 var stubStorage = stubMapping{}
 
@@ -154,104 +154,61 @@ func rankMatch(expect string, closeMatch map[string]interface{}) float32 {
 }
 
 func renderFieldAsString(fields map[string]interface{}) string {
-	template := "{\n"
-	for key, val := range fields {
-		template += fmt.Sprintf("\t%s: %v\n", key, val)
+	// lets make the rendering deterministic
+	keys := make([]string, 0, len(fields))
+	for k := range fields {
+		keys = append(keys, k)
 	}
-	template += "}"
-	return template
-}
+	sort.Strings(keys)
 
-func deepEqual(expect, actual interface{}) bool {
-	return reflect.DeepEqual(expect, actual)
-}
-
-func regexMatch(expect, actual interface{}) bool {
-	match, err := regexp.Match(expect.(string), []byte(actual.(string)))
-	if err != nil {
-		log.Printf("Error on matching regex %s with %s error:%v\n", expect, actual, err)
+	buff := bytes.Buffer{}
+	buff.WriteString("{\n")
+	for _, k := range keys {
+		buff.WriteString(fmt.Sprintf("\t%s: %v\n", k, fields[k]))
 	}
-	return match
+	buff.WriteString("}")
+	return buff.String()
 }
 
-func equals(expect, actual map[string]interface{}) bool {
-	return find(expect, actual, true, true, deepEqual)
+func equals(input1, input2 map[string]interface{}) bool {
+	return reflect.DeepEqual(input1, input2)
 }
 
 func contains(expect, actual map[string]interface{}) bool {
-	return find(expect, actual, true, false, deepEqual)
+	for key, val := range expect {
+		actualvalue, ok := actual[key]
+		if !ok {
+			return ok
+		}
+
+		if !reflect.DeepEqual(val, actualvalue) {
+			return false
+		}
+	}
+	return true
 }
 
 func matches(expect, actual map[string]interface{}) bool {
-	return find(expect, actual, true, false, regexMatch)
-}
+	for keyExpect, valueExpect := range expect {
+		valueExpectString, ok := valueExpect.(string)
+		if !ok {
+			return false
+		}
+		actualvalue, ok := actual[keyExpect].(string)
+		if !ok {
+			return false
+		}
 
-func find(expect, actual interface{}, acc, exactMatch bool, f matchFunc) bool {
+		match, err := regexp.Match(valueExpectString, []byte(actualvalue))
+		if err != nil {
+			log.Printf("Error on matching regex %s with %s error:%v\n", valueExpectString, actualvalue, err)
+		}
 
-	// circuit brake
-	if acc == false {
-		return false
+		if !match {
+			return false
+		}
 	}
-
-	expectArrayValue, expectArrayOk := expect.([]interface{})
-	if expectArrayOk {
-
-		actualArrayValue, actualArrayOk := actual.([]interface{})
-		if !actualArrayOk {
-			acc = false
-			return acc
-		}
-
-		if exactMatch {
-			if len(expectArrayValue) != len(actualArrayValue) {
-				acc = false
-				return acc
-			}
-		} else {
-			if len(expectArrayValue) > len(actualArrayValue) {
-				acc = false
-				return acc
-			}
-		}
-
-		for expectItemIndex, expectItemValue := range expectArrayValue {
-			actualItemValue := actualArrayValue[expectItemIndex]
-			acc = find(expectItemValue, actualItemValue, acc, exactMatch, f)
-		}
-
-		return acc
-	}
-
-	expectMapValue, expectMapOk := expect.(map[string]interface{})
-	if expectMapOk {
-
-		actualMapValue, actualMapOk := actual.(map[string]interface{})
-		if !actualMapOk {
-			acc = false
-			return acc
-		}
-
-		if exactMatch {
-			if len(expectMapValue) != len(actualMapValue) {
-				acc = false
-				return acc
-			}
-		} else {
-			if len(expectMapValue) > len(actualMapValue) {
-				acc = false
-				return acc
-			}
-		}
-
-		for expectItemKey, expectItemValue := range expectMapValue {
-			actualItemValue := actualMapValue[expectItemKey]
-			acc = find(expectItemValue, actualItemValue, acc, exactMatch, f)
-		}
-
-		return acc
-	}
-
-	return f(expect, actual)
+	return true
 }
 
 func clearStorage() {

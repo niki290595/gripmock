@@ -6,13 +6,13 @@ import (
 	"os"
 	"time"
 
-	oneof "github.com/tokopedia/gripmock/example/one-of"
-
+	"github.com/quintans/gripmock/example/multi-project/proto/prj-bar/bar"
+	"github.com/quintans/gripmock/example/multi-project/proto/prj-foo/foo"
 	"google.golang.org/grpc"
 )
 
 func main() {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	// Set up a connection to the server.
@@ -22,18 +22,17 @@ func main() {
 	}
 	defer conn.Close()
 
-	c := oneof.NewGripmockClient(conn)
+	c := foo.NewGreeterClient(conn)
 
 	// Contact the server and print out its response.
 	name := "tokopedia"
 	if len(os.Args) > 1 {
 		name = os.Args[1]
 	}
-	r, err := c.SayHello(context.Background(), &oneof.Request{Name: name})
+	r, err := c.Greet(context.Background(), &bar.Request{Name: name})
 	if err != nil {
 		log.Fatalf("error from grpc: %v", err)
 	}
-	log.Printf("Reply1: %s", r.GetReply1())
-	log.Printf("Reply2: %s", r.GetReply2())
-	log.Printf("ReplyType: %s", r.GetReplyType())
+	log.Printf("Greeting: %s (return code %d)", r.Message, r.ReturnCode)
+
 }
